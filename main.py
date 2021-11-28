@@ -68,7 +68,7 @@ def flow(update: Update, context: CallbackContext):
             update.message.reply_text(message)
         else:
             message = ('Пожалуйста, подтвердите или отмените заказ, или остановите бота командой "stop".\n'
-                       'Вы хотите маленькую пиццу, оплата - наличкой?')
+                       f'Вы хотите {bot.size} пиццу, оплата - {bot.payment}?')
             update.message.reply_text(message)
 
 
