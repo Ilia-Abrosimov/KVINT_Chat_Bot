@@ -2,9 +2,11 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import (CallbackContext, CommandHandler, ConversationHandler,
-                          Filters, MessageHandler, Updater)
+from telegram import Update
+from telegram.ext import (CallbackContext, CommandHandler, Filters,
+                          MessageHandler, Updater)
+
+from state_machine import Bot
 
 load_dotenv()
 
@@ -16,83 +18,58 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-PAYMENT, APPROVE, EXIT = range(3)
+bot = Bot()
 
 
-def start(update: Update, context: CallbackContext) -> int:
+def start(update: Update, context: CallbackContext):
     """Start the conversation and ask user for choice pizza size."""
 
-    buttons = ReplyKeyboardMarkup(keyboard=[['Большую', 'Маленькую']],
-                                  resize_keyboard=True,
-                                  input_field_placeholder='Большую или Маленькую')
-    update.message.reply_text(
-        'Какую вы хотите пиццу? Большую или маленькую?',
-        reply_markup=buttons,
-    )
-    return PAYMENT
+    bot.start()
+    message = 'Какую вы хотите пиццу? Большую или маленькую?'
+    update.message.reply_text(message)
+    return
 
 
-def payment_method(update: Update, context: CallbackContext) -> int:
-    """Save previous choice and ask user about payment method."""
-
-    text = update.message.text
-    if text.lower() == 'большую' or text.lower() == 'маленькую':
-        context.user_data['size'] = text
-        buttons = ReplyKeyboardMarkup([['Наличкой', 'Картой']],
-                                      resize_keyboard=True,
-                                      input_field_placeholder='Картой или Наличкой')
-        update.message.reply_text('Как вы будете платить?',
-                                  reply_markup=buttons)
-        return APPROVE
-    else:
-        update.message.reply_text('Пожалуйста, выберите размер пиццы')
-        return start(update, context)
-
-
-def approve(update: Update, context: CallbackContext) -> int:
-    """Save previous choice and ask user confirm order."""
-
-    text = update.message.text
-    if text.lower() == 'наличкой' or text.lower() == 'картой':
-        context.user_data['payment'] = text
-        size = context.user_data['size'].lower()
-        payment = context.user_data['payment'].lower()
-        buttons = ReplyKeyboardMarkup([['Да', 'Нет'],
-                                       ['/stop']],
-                                      resize_keyboard=True,
-                                      one_time_keyboard=True,
-                                      input_field_placeholder='Да или Нет')
-        update.message.reply_text(f'Вы хотите {size} пиццу, оплата - {payment}?',
-                                  reply_markup=buttons)
-        return EXIT
-    else:
-        update.message.reply_text('Пожалуйста, выберите способ оплаты')
-        return APPROVE
-
-
-def say_bye(update: Update, context: CallbackContext) -> int:
-    """Thanks the user for order or stop conversation."""
-
-    answer = update.message.text
-    if answer.lower() == 'да':
-        update.message.reply_text('Спасибо за заказ')
-        return ConversationHandler.END
-    elif answer.lower() == 'нет':
-        update.message.reply_text('Для начала формирования заказа введите команду "/start"')
-        return ConversationHandler.END
-    else:
-        update.message.reply_text('Пожалуйста, подтвердите или отмените заказ, или остановите бота командой "stop".\n'
-                                  'Вы хотите маленькую пиццу, оплата - наличкой?')
-        return EXIT
-
-
-def stop(update: Update, context: CallbackContext) -> int:
+def stop(update: Update, context: CallbackContext):
     """Stop conversation."""
 
-    user_data = context.user_data
-    update.message.reply_text('Для начала формирования заказа введите команду "/start"')
-    user_data.clear()
-    return ConversationHandler.END
+    bot.stop()
+    message = 'Для начала формирования заказа введите команду "/start"'
+    update.message.reply_text(message)
+    return
+
+
+def flow(update: Update, context: CallbackContext):
+    text = update.message.text.lower()
+    if bot.state == 'choice of size':
+        if text == 'большую' or text == 'маленькую':
+            bot.payment_method()
+            bot.set_size(text)
+            message = 'Как вы будете платить?'
+            update.message.reply_text(message)
+        else:
+            update.message.reply_text('Пожалуйста, выберите размер пиццы')
+    elif bot.state == 'choice of payment':
+        if text == 'наличкой' or text == 'картой':
+            bot.approve()
+            bot.set_payment(text)
+            message = f'Вы хотите {bot.size} пиццу, оплата - {bot.payment}?'
+            update.message.reply_text(message)
+        else:
+            update.message.reply_text('Пожалуйста, выберите способ оплаты')
+    elif bot.state == 'formation order':
+        if text == 'да':
+            bot.say_bye()
+            message = 'Спасибо за заказ'
+            update.message.reply_text(message)
+        elif text == 'нет':
+            bot.say_bye()
+            message = 'Для начала формирования заказа введите команду "/start"'
+            update.message.reply_text(message)
+        else:
+            message = ('Пожалуйста, подтвердите или отмените заказ, или остановите бота командой "stop".\n'
+                       'Вы хотите маленькую пиццу, оплата - наличкой?')
+            update.message.reply_text(message)
 
 
 def main() -> None:
@@ -100,17 +77,9 @@ def main() -> None:
 
     updater = Updater(TELEGRAM_TOKEN)
     dispatcher = updater.dispatcher
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            PAYMENT: [MessageHandler(Filters.text & ~Filters.command, payment_method)],
-            APPROVE: [MessageHandler(Filters.text & ~Filters.command, approve)],
-            EXIT: [MessageHandler(Filters.text & ~Filters.command, say_bye)],
-        },
-        fallbacks=[CommandHandler('stop', stop)],
-    )
-
-    dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(CommandHandler('start', start))
+    dispatcher.add_handler(CommandHandler('stop', stop))
+    dispatcher.add_handler(MessageHandler(Filters.text, flow))
     updater.start_polling()
     updater.idle()
 
